@@ -15,11 +15,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: redis-service
+  name: redis-cluster
   namespace: fastapi
 spec:
+  clusterIP: None   # Headless service
   selector:
     app: redis
   ports:
     - port: 6379
-      targetPort: 6379

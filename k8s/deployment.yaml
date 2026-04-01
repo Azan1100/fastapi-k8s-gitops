@@ -21,13 +21,15 @@ spec:
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "http://signoz-otel-collector.signoz:4317"
+ ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: redis
   namespace: fastapi
 spec:
-  replicas: 1
+  serviceName: redis-cluster
+  replicas: 3
   selector:
     matchLabels:
       app: redis
@@ -39,5 +41,6 @@ spec:
       containers:
       - name: redis
         image: redis:7
+        command: [redis-server, --appendonly, yes]
         ports:
         - containerPort: 6379
