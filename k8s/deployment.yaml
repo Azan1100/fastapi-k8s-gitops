@@ -20,4 +20,4 @@ spec:
         - containerPort: 8000
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: "http://otel-collector:4317"
+          value: "http://signoz-otel-collector.signoz:4317"
