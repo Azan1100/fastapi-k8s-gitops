@@ -10,6 +10,8 @@ spec:
     repoURL: https://github.com/Azan1100/fastapi-k8s-gitops
     targetRevision: HEAD
     path: k8s
+    plugin:
+      name: kustomize
 
   destination:
     server: https://kubernetes.default.svc

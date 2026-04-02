@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-redis
+redis-py-cluster
 opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp
