@@ -1,30 +1,49 @@
 from fastapi import FastAPI
+import redis
 
-# OpenTelemetry imports
+# OpenTelemetry
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
+from fastapi.staticfiles import StaticFiles
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 app = FastAPI()
 
-# 1. Set tracer provider
+# -------- OpenTelemetry --------
 trace.set_tracer_provider(TracerProvider())
 
-# 2. Configure exporter (THIS SENDS DATA TO SIGNOZ)
 otlp_exporter = OTLPSpanExporter(
-    endpoint="http://signoz-otel-collector.signoz:4317",
+    endpoint=http://signoz-otel-collector.signoz:4317,
     insecure=True
 )
 
-# 3. Add span processor
 span_processor = BatchSpanProcessor(otlp_exporter)
 trace.get_tracer_provider().add_span_processor(span_processor)
 
-# 4. Instrument FastAPI
 FastAPIInstrumentor.instrument_app(app)
 
-@app.get("/")
-def root():
-    return {"message": "Tracing works 🚀"}
+# -------- Redis (Cluster entry point service) --------
+redis_client = redis.Redis(
+    host=redis-cluster,
+    port=6379,
+    decode_responses=True
+)
+
+@app.get(/api)
+def get_data():
+    # Count visits
+    redis_client.incr(visits)
+
+    # Count Redis access
+    redis_client.incr(redis_hits)
+
+    visits = redis_client.get(visits)
+    redis_hits = redis_client.get(redis_hits)
+
+    return {
+        message: 🚀 Redis Cluster Demo,
+        visits: visits,
+        redis_hits: redis_hits
+    }

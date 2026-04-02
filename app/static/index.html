@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Redis Cluster Demo</title>
+</head>
+<body>
+  <h1>🚀 Redis Cluster Dashboard</h1>
+
+  <p id="msg"></p>
+  <p id="visits"></p>
+  <p id="hits"></p>
+
+  <button onclick="loadData()">Refresh</button>
+
+  <script>
+    function loadData() {
+      fetch("/api")
+        .then(res => res.json())
+        .then(data => {
+          document.getElementById("msg").innerText = data.message;
+          document.getElementById("visits").innerText = "Visits: " + data.visits;
+          document.getElementById("hits").innerText = "Redis Hits: " + data.redis_hits;
+        });
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
