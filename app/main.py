@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 import logging
-from rediscluster import RedisCluster
+import redis
 
 # OpenTelemetry
 from opentelemetry import trace
@@ -26,34 +26,30 @@ trace.get_tracer_provider().add_span_processor(span_processor)
 
 FastAPIInstrumentor.instrument_app(app)
 
-# -------- Redis Cluster --------
-startup_nodes = [
-    {"host": "redis-0.redis-headless.fastapi.svc.cluster.local", "port": 6379},
-    {"host": "redis-1.redis-headless.fastapi.svc.cluster.local", "port": 6379},
-    {"host": "redis-2.redis-headless.fastapi.svc.cluster.local", "port": 6379},
-]
-
+# -------- Redis Setup --------
 try:
-    redis_cluster = RedisCluster(startup_nodes=startup_nodes, decode_responses=True, skip_full_coverage_check=True)
-    logger.info("✅ Connected to Redis Cluster")
+    redis_client = redis.Redis(host="redis-master.fastapi.svc.cluster.local", port=6379, decode_responses=True)
+    # Test connection
+    redis_client.ping()
+    logger.info("✅ Connected to Redis Master")
 except Exception as e:
-    logger.error(f"❌ Redis Cluster connection failed: {e}")
-    redis_cluster = None
+    logger.error(f"❌ Redis connection failed: {e}")
+    redis_client = None
 
 @app.get("/api")
 def get_data():
-    if not redis_cluster:
-        return {"error": "Redis cluster unavailable"}, 503
+    if not redis_client:
+        return {"error": "Redis unavailable"}, 503
     
     try:
-        redis_cluster.incr("visits")
-        redis_cluster.incr("redis_hits")
+        redis_client.incr("visits")
+        redis_client.incr("redis_hits")
 
-        visits_count = redis_cluster.get("visits")
-        redis_hits_count = redis_cluster.get("redis_hits")
+        visits_count = redis_client.get("visits")
+        redis_hits_count = redis_client.get("redis_hits")
 
         return {
-            "message": "🚀 Redis Cluster Demo",
+            "message": "🚀 Redis Simple HA Demo",
             "visits": visits_count,
             "redis_hits": redis_hits_count
         }
