@@ -10,7 +10,6 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 # -------- OpenTelemetry --------
 trace.set_tracer_provider(TracerProvider())
@@ -46,3 +45,6 @@ def get_data():
         "visits": visits_count,
         "redis_hits": redis_hits_count
     }
+
+# Mount static files AFTER API routes
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
