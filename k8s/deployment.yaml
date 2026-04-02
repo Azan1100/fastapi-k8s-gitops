@@ -55,7 +55,7 @@ metadata:
   name: fastapi-app
   namespace: fastapi
 spec:
-  replicas: 3
+  replicas: 4
   selector:
     matchLabels:
       app: fastapi
