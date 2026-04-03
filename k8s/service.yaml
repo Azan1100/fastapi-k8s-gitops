@@ -1,25 +1,25 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Nexus API Service
+#
+# Type LoadBalancer provisions an external cloud load balancer (AWS ELB, GCP LB)
+# so the app is reachable from outside the cluster.
+#
+# Note: The Redis service is created automatically by the Bitnami Helm chart —
+# no manual Service definition is needed for Redis here.
+# ──────────────────────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
-  name: fastapi-service
+  name: nexus-api
   namespace: fastapi
+  labels:
+    app: nexus-api
 spec:
   type: LoadBalancer
   selector:
-    app: fastapi
+    app: nexus-api   # Routes to pods with this label (set in deployment.yaml)
   ports:
-    - port: 80
+    - name: http
+      port: 80
       targetPort: 8000
       protocol: TCP
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: redis-master
-  namespace: fastapi
-spec:
-  selector:
-    app: redis-master
-  ports:
-  - port: 6379
-    targetPort: 6379

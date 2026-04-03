@@ -1,78 +1,137 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Nexus FastAPI Deployment
+#
+# Notes:
+#   • Redis is NO longer deployed via raw YAML — it is managed by the Bitnami
+#     Helm chart (k8s/redis/values.yaml).  Only the FastAPI app lives here.
+#   • Env vars read from a Secret (nexus-config) for sensitive values and
+#     directly from literals for non-sensitive configuration.
+#   • Liveness  probe → /health        (fast, no Redis check)
+#   • Readiness probe → /health/redis  (confirms Redis reachability)
+# ──────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: fastapi-app
+  name: nexus-api
   namespace: fastapi
+  labels:
+    app: nexus-api
+    version: "2.0.0"
 spec:
+  # 4 replicas spread across nodes by the default Kubernetes scheduler.
+  # Each replica connects to Redis via Sentinel — all pods share the same
+  # rate-limit counters and cache because state lives in Redis, not in-process.
   replicas: 4
+
   selector:
     matchLabels:
-      app: fastapi
+      app: nexus-api
+
+  # Rolling update: bring up a new pod before killing an old one.
+  # maxUnavailable: 0  → zero-downtime deploys (no requests dropped)
+  # maxSurge: 1        → at most 1 extra pod during rollout (controls cost)
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
   template:
     metadata:
       labels:
-        app: fastapi
+        app: nexus-api
+      annotations:
+        # Forces pod restart when the Secret changes (ArgoCD picks this up)
+        checksum/secret: "nexus-config"
     spec:
+      # Ensure app pods spread across different nodes (soft anti-affinity)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: nexus-api
+
       containers:
-      - name: fastapi
-        image: azanwani/fastapi-app:latest
-        ports:
-        - containerPort: 8000
-        env:
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://signoz-otel-collector.signoz:4317
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 5
-          periodSeconds: 5
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis-master
-  namespace: fastapi
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: redis-master
-  template:
-    metadata:
-      labels:
-        app: redis-master
-    spec:
-      containers:
-      - name: redis
-        image: redis:7-alpine
-        ports:
-        - containerPort: 6379
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis-replica
-  namespace: fastapi
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: redis-replica
-  template:
-    metadata:
-      labels:
-        app: redis-replica
-    spec:
-      containers:
-      - name: redis
-        image: redis:7-alpine
-        command: ["redis-server", "--replicaof", "redis-master", "6379"]
-        ports:
-        - containerPort: 6379
+        - name: nexus-api
+          # Image is updated by the CI pipeline (ci.yml) on every push to main
+          image: azanwani/fastapi-app:latest
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8000
+              name: http
+
+          env:
+            # ── App ─────────────────────────────────────────────────────────
+            - name: ENVIRONMENT
+              value: "production"
+            - name: APP_VERSION
+              value: "2.0.0"
+
+            # ── Redis Sentinel ───────────────────────────────────────────────
+            # Bitnami headless service gives a stable DNS name per pod:
+            #   redis-node-{0,1,2}.redis-headless.fastapi.svc.cluster.local
+            # Listing all 3 means the Sentinel client can reach any live Sentinel
+            # even if one pod is being rescheduled.
+            - name: REDIS_SENTINEL_HOSTS
+              value: "redis-node-0.redis-headless.fastapi.svc.cluster.local:26379,redis-node-1.redis-headless.fastapi.svc.cluster.local:26379,redis-node-2.redis-headless.fastapi.svc.cluster.local:26379"
+
+            - name: REDIS_MASTER_SET
+              value: "mymaster"
+
+            # Password pulled from the same Secret used by the Helm chart
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: redis-password
+
+            # ── Cache & Rate Limiting ────────────────────────────────────────
+            - name: CACHE_TTL_SECONDS
+              value: "300"
+            - name: RATE_LIMIT_MAX_REQUESTS
+              value: "100"
+            - name: RATE_LIMIT_WINDOW_SECONDS
+              value: "60"
+
+            # ── OpenTelemetry ────────────────────────────────────────────────
+            # SigNoz OTel Collector runs in the "signoz" namespace.
+            # The service URL follows the pattern:
+            #   {service-name}.{namespace}.svc.cluster.local:{port}
+            - name: OTEL_ENDPOINT
+              value: "http://signoz-otel-collector.signoz:4317"
+            - name: OTEL_SERVICE_NAME
+              value: "nexus-api"
+
+          # ── Probes ─────────────────────────────────────────────────────────
+          livenessProbe:
+            # /health never calls Redis — returns 200 as long as Python runs
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+
+          readinessProbe:
+            # /health/redis pings both master and replica;
+            # returns 503 if unreachable → pod is removed from LB endpoints
+            httpGet:
+              path: /health/redis
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+
+          # ── Resources ──────────────────────────────────────────────────────
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 500m

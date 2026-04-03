@@ -1,41 +1,623 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" class="h-full bg-slate-950">
 <head>
-  <title>Redis Cluster Demo</title>
-</head>
-<body>
-  <h1>🚀 Redis Cluster Dashboard</h1>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexus — Task Management</title>
 
-  <p id="msg"></p>
-  <p id="visits"></p>
-  <p id="hits"></p>
+  <!-- Tailwind CSS via CDN (no build step required) -->
+  <script src="https://cdn.tailwindcss.com"></script>
 
-  <button onclick="loadData()">Refresh</button>
+  <!-- Alpine.js — lightweight reactive UI without a build pipeline -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+
+  <!-- Chart.js — for the analytics doughnut chart -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 
   <script>
-    function loadData() {
-      fetch("/api")
-        .then(res => {
-          console.log("Response status:", res.status);
-          return res.json();
-        })
-        .then(data => {
-          console.log("Data received:", data);
-          document.getElementById("msg").innerText = data.message || "Error: No message";
-          document.getElementById("visits").innerText = "Visits: " + (data.visits || "N/A");
-          document.getElementById("hits").innerText = "Redis Hits: " + (data.redis_hits || "N/A");
-        })
-        .catch(error => {
-          console.error("Error fetching data:", error);
-          document.getElementById("msg").innerText = "Error: " + error.message;
-          document.getElementById("visits").innerText = "Visits: Error";
-          document.getElementById("hits").innerText = "Redis Hits: Error";
-        });
+    // Tailwind custom theme config
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' }
+          },
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    /* Glassmorphism card */
+    .glass {
+      background: rgba(255,255,255,0.04);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.08);
     }
 
-    // Load data on page load and refresh every 5 seconds
-    loadData();
-    setInterval(loadData, 5000);
+    /* Animated gradient badge */
+    .gradient-badge {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    }
+
+    /* Smooth fade-in for new tasks */
+    .task-enter {
+      animation: fadeSlideIn 0.3s ease-out;
+    }
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Pulsing Redis status dot */
+    .pulse-green { animation: pulseGreen 2s infinite; }
+    @keyframes pulseGreen {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+      50%       { box-shadow: 0 0 0 6px rgba(34,197,94,0); }
+    }
+    .pulse-red { animation: pulseRed 2s infinite; }
+    @keyframes pulseRed {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
+      50%       { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
+    }
+
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.4); border-radius: 3px; }
+  </style>
+</head>
+
+<body class="min-h-full font-sans text-slate-100 antialiased"
+      x-data="nexusApp()"
+      x-init="init()">
+
+  <!-- ── Top Navigation ────────────────────────────────────────────────────── -->
+  <nav class="glass sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <!-- Logo mark -->
+      <div class="gradient-badge w-9 h-9 rounded-xl flex items-center justify-center shadow-lg">
+        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white">Nexus</h1>
+        <p class="text-xs text-slate-400 -mt-0.5">Task Management · Redis HA</p>
+      </div>
+    </div>
+
+    <!-- Redis status indicators -->
+    <div class="flex items-center gap-6">
+      <div class="flex items-center gap-2 text-sm">
+        <div :class="redisStatus.master === 'ok' ? 'bg-emerald-500 pulse-green' : 'bg-red-500 pulse-red'"
+             class="w-2 h-2 rounded-full"></div>
+        <span class="text-slate-400 hidden sm:block">Master</span>
+      </div>
+      <div class="flex items-center gap-2 text-sm">
+        <div :class="redisStatus.replica === 'ok' ? 'bg-emerald-500 pulse-green' : 'bg-amber-500 pulse-red'"
+             class="w-2 h-2 rounded-full"></div>
+        <span class="text-slate-400 hidden sm:block">Replica</span>
+      </div>
+      <button @click="openModal = true"
+              class="gradient-badge px-4 py-2 rounded-lg text-sm font-medium text-white
+                     hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/20">
+        + New Task
+      </button>
+    </div>
+  </nav>
+
+  <!-- ── Main Layout ────────────────────────────────────────────────────────── -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+
+    <!-- ── Stats Bar ─────────────────────────────────────────────────────── -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+
+      <!-- Total Tasks -->
+      <div class="glass rounded-2xl p-5">
+        <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Tasks</p>
+        <p class="text-3xl font-bold text-white mt-2" x-text="analytics.total_tasks ?? '—'"></p>
+        <p class="text-xs text-slate-500 mt-1">All time</p>
+      </div>
+
+      <!-- In Progress -->
+      <div class="glass rounded-2xl p-5">
+        <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">In Progress</p>
+        <p class="text-3xl font-bold text-amber-400 mt-2"
+           x-text="analytics.by_status?.in_progress ?? '—'"></p>
+        <p class="text-xs text-slate-500 mt-1">Active work</p>
+      </div>
+
+      <!-- Cache Hit Rate -->
+      <div class="glass rounded-2xl p-5">
+        <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Cache Hit Rate</p>
+        <p class="text-3xl font-bold text-emerald-400 mt-2"
+           x-text="analytics.cache_hit_rate_pct != null ? analytics.cache_hit_rate_pct + '%' : '—'"></p>
+        <p class="text-xs text-slate-500 mt-1">
+          <span x-text="analytics.cache_hits ?? 0"></span> hits /
+          <span x-text="analytics.cache_misses ?? 0"></span> misses
+        </p>
+      </div>
+
+      <!-- Done -->
+      <div class="glass rounded-2xl p-5">
+        <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Completed</p>
+        <p class="text-3xl font-bold text-indigo-400 mt-2"
+           x-text="analytics.by_status?.done ?? '—'"></p>
+        <p class="text-xs text-slate-500 mt-1">Finished tasks</p>
+      </div>
+    </div>
+
+    <!-- ── Content Grid ───────────────────────────────────────────────────── -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+      <!-- Task List (2/3 width) -->
+      <div class="lg:col-span-2 space-y-4">
+        <!-- Filters -->
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="text-sm text-slate-400 font-medium">Filter:</span>
+          <template x-for="s in ['all','todo','in_progress','review','done']" :key="s">
+            <button @click="filterStatus = s; loadTasks()"
+                    :class="filterStatus === s
+                      ? 'bg-indigo-600 text-white'
+                      : 'glass text-slate-400 hover:text-white'"
+                    class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize"
+                    x-text="s.replace('_', ' ')">
+            </button>
+          </template>
+        </div>
+
+        <!-- Loading state -->
+        <div x-show="loading" class="text-center py-12">
+          <div class="inline-block w-8 h-8 border-2 border-indigo-500 border-t-transparent
+                      rounded-full animate-spin"></div>
+          <p class="text-slate-400 mt-3 text-sm">Loading tasks…</p>
+        </div>
+
+        <!-- Empty state -->
+        <div x-show="!loading && tasks.length === 0" class="text-center py-16">
+          <div class="w-16 h-16 glass rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <svg class="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                    d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+            </svg>
+          </div>
+          <p class="text-slate-400 font-medium">No tasks yet</p>
+          <p class="text-slate-600 text-sm mt-1">Click "+ New Task" to get started</p>
+        </div>
+
+        <!-- Task Cards -->
+        <template x-for="task in tasks" :key="task.id">
+          <div class="glass rounded-2xl p-5 task-enter hover:border-indigo-500/30 transition-colors">
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex-1 min-w-0">
+                <!-- Title + Status -->
+                <div class="flex items-center gap-2 mb-1.5">
+                  <span :class="statusColor(task.status)"
+                        class="w-2 h-2 rounded-full flex-shrink-0"></span>
+                  <h3 class="font-semibold text-white text-sm truncate" x-text="task.title"></h3>
+                </div>
+
+                <!-- Description -->
+                <p x-show="task.description"
+                   class="text-slate-400 text-xs line-clamp-2 mb-3"
+                   x-text="task.description"></p>
+
+                <!-- Tags + Meta -->
+                <div class="flex items-center gap-2 flex-wrap">
+                  <!-- Priority badge -->
+                  <span :class="priorityBadge(task.priority)"
+                        class="px-2 py-0.5 rounded-md text-xs font-medium capitalize"
+                        x-text="task.priority"></span>
+
+                  <!-- Status badge -->
+                  <span :class="statusBadge(task.status)"
+                        class="px-2 py-0.5 rounded-md text-xs font-medium"
+                        x-text="task.status.replace('_', ' ')"></span>
+
+                  <!-- Tags -->
+                  <template x-for="tag in task.tags" :key="tag">
+                    <span class="px-2 py-0.5 bg-slate-800 text-slate-400 rounded-md text-xs"
+                          x-text="'#' + tag"></span>
+                  </template>
+                </div>
+
+                <!-- Assignee & Date -->
+                <div class="flex items-center gap-3 mt-2.5 text-xs text-slate-500">
+                  <span x-show="task.assignee">
+                    <span class="text-slate-600">→</span>
+                    <span x-text="task.assignee"></span>
+                  </span>
+                  <span x-text="formatDate(task.created_at)"></span>
+                </div>
+              </div>
+
+              <!-- Actions -->
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <!-- Quick status cycle -->
+                <button @click="cycleStatus(task)"
+                        title="Advance status"
+                        class="w-8 h-8 glass rounded-lg flex items-center justify-center
+                               text-slate-400 hover:text-indigo-400 transition-colors">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M13 5l7 7-7 7M5 5l7 7-7 7"/>
+                  </svg>
+                </button>
+                <!-- Delete -->
+                <button @click="deleteTask(task.id)"
+                        title="Delete task"
+                        class="w-8 h-8 glass rounded-lg flex items-center justify-center
+                               text-slate-400 hover:text-red-400 transition-colors">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Analytics Sidebar (1/3 width) -->
+      <div class="space-y-4">
+
+        <!-- Status Distribution Chart -->
+        <div class="glass rounded-2xl p-5">
+          <h2 class="text-sm font-semibold text-white mb-4">Status Distribution</h2>
+          <div class="relative h-44">
+            <canvas id="statusChart"></canvas>
+          </div>
+          <!-- Legend -->
+          <div class="grid grid-cols-2 gap-2 mt-4">
+            <template x-for="[key, val] in Object.entries(analytics.by_status || {})" :key="key">
+              <div class="flex items-center gap-1.5 text-xs text-slate-400">
+                <div :class="statusColor(key)" class="w-2 h-2 rounded-full flex-shrink-0"></div>
+                <span class="capitalize" x-text="key.replace('_',' ')"></span>
+                <span class="text-slate-500 ml-auto" x-text="val"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Priority Breakdown -->
+        <div class="glass rounded-2xl p-5">
+          <h2 class="text-sm font-semibold text-white mb-4">Priority Breakdown</h2>
+          <template x-for="[key, val] in Object.entries(analytics.by_priority || {})" :key="key">
+            <div class="mb-3">
+              <div class="flex items-center justify-between text-xs mb-1">
+                <span class="capitalize" :class="priorityText(key)" x-text="key"></span>
+                <span class="text-slate-400" x-text="val"></span>
+              </div>
+              <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div :class="priorityBar(key)"
+                     :style="'width:' + barWidth(val, analytics.total_tasks) + '%'"
+                     class="h-full rounded-full transition-all duration-700"></div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Redis Info -->
+        <div class="glass rounded-2xl p-5">
+          <h2 class="text-sm font-semibold text-white mb-3">Redis Sentinel Status</h2>
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-slate-400">Master node</span>
+              <span :class="redisStatus.master === 'ok' ? 'text-emerald-400' : 'text-red-400'"
+                    x-text="redisStatus.master === 'ok' ? '● Online' : '● ' + redisStatus.master"></span>
+            </div>
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-slate-400">Replica node</span>
+              <span :class="redisStatus.replica === 'ok' ? 'text-emerald-400' : 'text-amber-400'"
+                    x-text="redisStatus.replica === 'ok' ? '● Online' : '● ' + redisStatus.replica"></span>
+            </div>
+            <div class="flex items-center justify-between text-xs pt-1 border-t border-white/5">
+              <span class="text-slate-400">Architecture</span>
+              <span class="text-indigo-400">Sentinel HA</span>
+            </div>
+            <div class="flex items-center justify-between text-xs">
+              <span class="text-slate-400">Read strategy</span>
+              <span class="text-slate-300">Replica preferred</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── Create Task Modal ──────────────────────────────────────────────────── -->
+  <div x-show="openModal"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+       @click.self="openModal = false">
+
+    <div class="glass rounded-2xl w-full max-w-md p-6 space-y-4"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 scale-95"
+         x-transition:enter-end="opacity-100 scale-100">
+
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-semibold text-white">New Task</h2>
+        <button @click="openModal = false" class="text-slate-400 hover:text-white transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Form -->
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Title *</label>
+          <input x-model="newTask.title" type="text" placeholder="What needs to be done?"
+                 class="w-full bg-slate-900/80 border border-white/10 rounded-xl px-4 py-2.5
+                        text-sm text-white placeholder-slate-600
+                        focus:outline-none focus:border-indigo-500 transition-colors" />
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Description</label>
+          <textarea x-model="newTask.description" rows="3" placeholder="Optional details…"
+                    class="w-full bg-slate-900/80 border border-white/10 rounded-xl px-4 py-2.5
+                           text-sm text-white placeholder-slate-600 resize-none
+                           focus:outline-none focus:border-indigo-500 transition-colors"></textarea>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">Priority</label>
+            <select x-model="newTask.priority"
+                    class="w-full bg-slate-900/80 border border-white/10 rounded-xl px-3 py-2.5
+                           text-sm text-white focus:outline-none focus:border-indigo-500 transition-colors">
+              <option value="low">Low</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">Assignee</label>
+            <input x-model="newTask.assignee" type="text" placeholder="Username"
+                   class="w-full bg-slate-900/80 border border-white/10 rounded-xl px-4 py-2.5
+                          text-sm text-white placeholder-slate-600
+                          focus:outline-none focus:border-indigo-500 transition-colors" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Tags (comma separated)</label>
+          <input x-model="newTask.tagsRaw" type="text" placeholder="backend, redis, urgent"
+                 class="w-full bg-slate-900/80 border border-white/10 rounded-xl px-4 py-2.5
+                        text-sm text-white placeholder-slate-600
+                        focus:outline-none focus:border-indigo-500 transition-colors" />
+        </div>
+      </div>
+
+      <div class="flex gap-3 pt-2">
+        <button @click="openModal = false"
+                class="flex-1 glass py-2.5 rounded-xl text-sm font-medium text-slate-400
+                       hover:text-white transition-colors">
+          Cancel
+        </button>
+        <button @click="createTask()"
+                :disabled="!newTask.title.trim()"
+                class="flex-1 gradient-badge py-2.5 rounded-xl text-sm font-medium text-white
+                       disabled:opacity-40 hover:opacity-90 transition-opacity">
+          Create Task
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Alpine.js App Logic ────────────────────────────────────────────────── -->
+  <script>
+    function nexusApp() {
+      return {
+        // ── State ──────────────────────────────────────────────────────────
+        tasks:        [],
+        analytics:    {},
+        redisStatus:  { master: 'checking…', replica: 'checking…' },
+        loading:      true,
+        openModal:    false,
+        filterStatus: 'all',
+        chart:        null,
+
+        newTask: {
+          title: '', description: '', priority: 'medium',
+          assignee: '', tagsRaw: ''
+        },
+
+        // Status cycle order
+        STATUS_CYCLE: ['todo', 'in_progress', 'review', 'done'],
+
+        // ── Lifecycle ──────────────────────────────────────────────────────
+        async init() {
+          await Promise.all([this.loadTasks(), this.loadAnalytics(), this.loadRedisHealth()]);
+          this.initChart();
+          // Auto-refresh every 15 seconds
+          setInterval(() => {
+            this.loadTasks();
+            this.loadAnalytics();
+            this.loadRedisHealth();
+          }, 15_000);
+        },
+
+        // ── Data Fetching ──────────────────────────────────────────────────
+        async loadTasks() {
+          this.loading = true;
+          try {
+            const url = this.filterStatus === 'all'
+              ? '/api/v1/tasks'
+              : `/api/v1/tasks?status=${this.filterStatus}`;
+            const res  = await fetch(url);
+            const body = await res.json();
+            this.tasks = body.data || [];
+          } catch (e) {
+            console.error('Failed to load tasks:', e);
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        async loadAnalytics() {
+          try {
+            const res  = await fetch('/api/v1/analytics/summary');
+            this.analytics = await res.json();
+            this.updateChart();
+          } catch (e) {
+            console.error('Failed to load analytics:', e);
+          }
+        },
+
+        async loadRedisHealth() {
+          try {
+            const res  = await fetch('/health/redis');
+            const body = await res.json();
+            this.redisStatus = body.redis || {};
+          } catch (e) {
+            this.redisStatus = { master: 'error', replica: 'error' };
+          }
+        },
+
+        // ── Task Actions ───────────────────────────────────────────────────
+        async createTask() {
+          if (!this.newTask.title.trim()) return;
+
+          const tags = this.newTask.tagsRaw
+            .split(',')
+            .map(t => t.trim())
+            .filter(Boolean);
+
+          const payload = {
+            title:       this.newTask.title.trim(),
+            description: this.newTask.description.trim() || null,
+            priority:    this.newTask.priority,
+            assignee:    this.newTask.assignee.trim() || null,
+            tags,
+          };
+
+          await fetch('/api/v1/tasks', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload),
+          });
+
+          // Reset form
+          this.newTask = { title: '', description: '', priority: 'medium', assignee: '', tagsRaw: '' };
+          this.openModal = false;
+          await Promise.all([this.loadTasks(), this.loadAnalytics()]);
+        },
+
+        async deleteTask(id) {
+          await fetch(`/api/v1/tasks/${id}`, { method: 'DELETE' });
+          await Promise.all([this.loadTasks(), this.loadAnalytics()]);
+        },
+
+        async cycleStatus(task) {
+          const idx     = this.STATUS_CYCLE.indexOf(task.status);
+          const next    = this.STATUS_CYCLE[(idx + 1) % this.STATUS_CYCLE.length];
+          await fetch(`/api/v1/tasks/${task.id}`, {
+            method:  'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ status: next }),
+          });
+          await Promise.all([this.loadTasks(), this.loadAnalytics()]);
+        },
+
+        // ── Chart ──────────────────────────────────────────────────────────
+        initChart() {
+          const ctx = document.getElementById('statusChart');
+          if (!ctx) return;
+          this.chart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+              labels:   ['To Do', 'In Progress', 'Review', 'Done'],
+              datasets: [{
+                data:            [0, 0, 0, 0],
+                backgroundColor: ['#64748b', '#f59e0b', '#6366f1', '#10b981'],
+                borderWidth:     0,
+                hoverOffset:     4,
+              }]
+            },
+            options: {
+              cutout:    '72%',
+              plugins:   { legend: { display: false } },
+              animation: { duration: 600 },
+            }
+          });
+        },
+
+        updateChart() {
+          if (!this.chart || !this.analytics.by_status) return;
+          const s = this.analytics.by_status;
+          this.chart.data.datasets[0].data = [
+            s.todo || 0, s.in_progress || 0, s.review || 0, s.done || 0
+          ];
+          this.chart.update();
+        },
+
+        // ── Helpers ────────────────────────────────────────────────────────
+        formatDate(iso) {
+          return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        },
+
+        barWidth(val, total) {
+          return total > 0 ? Math.round((val / total) * 100) : 0;
+        },
+
+        statusColor(s) {
+          return {
+            todo:        'bg-slate-500',
+            in_progress: 'bg-amber-400',
+            review:      'bg-indigo-400',
+            done:        'bg-emerald-500',
+          }[s] || 'bg-slate-600';
+        },
+
+        statusBadge(s) {
+          return {
+            todo:        'bg-slate-800 text-slate-400',
+            in_progress: 'bg-amber-900/40 text-amber-300',
+            review:      'bg-indigo-900/40 text-indigo-300',
+            done:        'bg-emerald-900/40 text-emerald-400',
+          }[s] || 'bg-slate-800 text-slate-400';
+        },
+
+        priorityBadge(p) {
+          return {
+            low:      'bg-slate-800 text-slate-400',
+            medium:   'bg-blue-900/40 text-blue-300',
+            high:     'bg-orange-900/40 text-orange-300',
+            critical: 'bg-red-900/40 text-red-400',
+          }[p] || 'bg-slate-800 text-slate-400';
+        },
+
+        priorityText(p) {
+          return {
+            low: 'text-slate-400', medium: 'text-blue-400',
+            high: 'text-orange-400', critical: 'text-red-400',
+          }[p] || 'text-slate-400';
+        },
+
+        priorityBar(p) {
+          return {
+            low: 'bg-slate-500', medium: 'bg-blue-500',
+            high: 'bg-orange-500', critical: 'bg-red-500',
+          }[p] || 'bg-slate-500';
+        },
+      };
+    }
   </script>
 </body>
 </html>

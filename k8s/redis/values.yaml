@@ -1,0 +1,167 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Bitnami Redis Helm Chart — values.yaml
+# Chart: bitnami/redis  (https://artifacthub.io/packages/helm/bitnami/redis)
+#
+# Architecture: Replication + Sentinel
+#
+# What this deploys:
+#   StatefulSet "redis-node" with 3 pods (1 master + 2 replicas).
+#   Every pod runs TWO containers:
+#     • redis     on port 6379  — the Redis data process
+#     • sentinel  on port 26379 — the Sentinel monitor/failover process
+#
+# Failover flow:
+#   1. Master pod becomes unreachable
+#   2. Two sentinels (quorum) agree it is down
+#   3. Sentinels elect a new master from the replicas
+#   4. FastAPI's Sentinel client re-queries port 26379 → gets new master address
+#   5. Traffic resumes — zero manual intervention required
+# ──────────────────────────────────────────────────────────────────────────────
+
+# "replication" = master + replicas.
+# "standalone" would deploy a single node with no HA.
+architecture: replication
+
+# ── Authentication ────────────────────────────────────────────────────────────
+auth:
+  enabled: true
+
+  # Reference a pre-existing K8s Secret (never hardcode passwords in values.yaml).
+  # Create with:
+  #   kubectl create secret generic redis-secret \
+  #     --from-literal=redis-password='<strong-password>' \
+  #     -n fastapi
+  #
+  # For full GitOps (secret in Git): replace with Sealed Secrets or
+  # External Secrets Operator — see docs/ARCHITECTURE.md for details.
+  existingSecret: redis-secret
+  existingSecretPasswordKey: redis-password
+
+# ── Sentinel ──────────────────────────────────────────────────────────────────
+sentinel:
+  enabled: true
+
+  # The logical name for this master group.  Clients and Sentinels both use
+  # this name to refer to the cluster — it must match redis_master_set in config.py.
+  masterSet: mymaster
+
+  # Quorum: minimum number of Sentinels that must agree a master is down
+  # before triggering failover.  With 3 pods (3 sentinels), quorum=2 means
+  # a single Sentinel failure does NOT cause erroneous failovers.
+  quorum: 2
+
+  # Sentinel waits this long (ms) before declaring a master "objectively down"
+  downAfterMilliseconds: 5000
+
+  # After electing a new master, Sentinel waits this long before starting
+  # the next possible failover (prevents flapping).
+  failoverTimeout: 10000
+
+  # Maximum time (ms) allowed for a replica to sync with the new master
+  parallelSyncs: 1
+
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 25m
+    limits:
+      memory: 128Mi
+      cpu: 100m
+
+# ── Master Node ────────────────────────────────────────────────────────────────
+master:
+  # Always 1 — there is exactly one master in Sentinel mode.
+  # Sentinel promotes a replica if the master dies; you never run >1 master.
+  count: 1
+
+  persistence:
+    # PersistentVolumeClaim — data survives pod restarts and rescheduling.
+    # Without this, all data is lost when the pod is evicted or rescheduled.
+    enabled: true
+    size: 8Gi
+    # Use your cluster's default StorageClass.  For AWS: gp3.  For GKE: standard-rwo.
+    # storageClass: gp3
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+  # Redis configuration flags passed directly to redis-server
+  configuration: |
+    # Maximum memory Redis will use before evicting keys.
+    # Set to 80% of the pod memory limit to leave headroom for overhead.
+    maxmemory 400mb
+
+    # LRU eviction: remove least-recently-used keys when maxmemory is reached.
+    # Good for cache workloads.  Use "noeviction" if Redis is your primary DB.
+    maxmemory-policy allkeys-lru
+
+    # Append-only file for durability — every write is fsynced to disk.
+    # Slightly slower but survives crashes without data loss.
+    appendonly yes
+    appendfsync everysec
+
+# ── Replica Nodes ─────────────────────────────────────────────────────────────
+replica:
+  # 2 replicas = 3 pods total.  Sentinel can survive the loss of 1 pod and
+  # still have enough nodes to elect a new master.  Min viable for HA.
+  replicaCount: 2
+
+  persistence:
+    enabled: true
+    size: 8Gi
+    # storageClass: gp3
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+  configuration: |
+    maxmemory 400mb
+    maxmemory-policy allkeys-lru
+    appendonly yes
+    appendfsync everysec
+
+# ── Metrics / Redis Exporter ───────────────────────────────────────────────────
+metrics:
+  # Deploys redis_exporter as a sidecar on each pod.
+  # Exposes Prometheus-format metrics at :9121/metrics.
+  # The SigNoz OTel Collector scrapes this endpoint (see docs/ARCHITECTURE.md).
+  enabled: true
+
+  resources:
+    requests:
+      memory: 32Mi
+      cpu: 10m
+    limits:
+      memory: 64Mi
+      cpu: 50m
+
+  # Service for the metrics endpoint
+  service:
+    port: 9121
+
+  # If you have Prometheus Operator installed, enable ServiceMonitor.
+  # If you're using SigNoz OTel Collector for scraping, leave this false
+  # and configure the prometheus receiver in the collector config instead.
+  serviceMonitor:
+    enabled: false
+
+# ── Pod Scheduling ────────────────────────────────────────────────────────────
+# Spread Redis pods across different cluster nodes so a single node failure
+# does not take down both master and replica.
+podAntiAffinityPreset: soft   # "soft" = prefer different nodes, don't enforce
+
+# ── Image ─────────────────────────────────────────────────────────────────────
+image:
+  # Pin to a specific minor version for reproducibility.
+  # Update during maintenance windows after testing.
+  tag: 7.4.1-debian-12-r0

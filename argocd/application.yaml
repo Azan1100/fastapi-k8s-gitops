@@ -1,7 +1,19 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# ArgoCD Application — Nexus API
+#
+# ArgoCD watches the Git repo and automatically syncs any changes in k8s/
+# to the cluster.  This is the GitOps control plane:
+#   Git commit → ArgoCD detects diff → kubectl apply
+#
+# IMPORTANT: The Bitnami Redis Helm chart is NOT managed by this ArgoCD
+# Application.  Helm-managed resources (the Redis StatefulSet, Services, etc.)
+# are installed separately via `helm install` and then optionally wrapped in
+# their own ArgoCD Application of type "helm".
+# ──────────────────────────────────────────────────────────────────────────────
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: fastapi-app
+  name: nexus-api
   namespace: argocd
 spec:
   project: default
@@ -10,8 +22,6 @@ spec:
     repoURL: https://github.com/Azan1100/fastapi-k8s-gitops
     targetRevision: HEAD
     path: k8s
-    plugin:
-      name: kustomize
 
   destination:
     server: https://kubernetes.default.svc
@@ -19,5 +29,10 @@ spec:
 
   syncPolicy:
     automated:
+      # prune: true  — ArgoCD deletes resources that are removed from Git
       prune: true
+      # selfHeal: true — ArgoCD re-applies if someone manually edits the cluster
       selfHeal: true
+    syncOptions:
+      # Prevents ArgoCD from pruning the Redis Helm resources it didn't create
+      - RespectIgnoreDifferences=true
