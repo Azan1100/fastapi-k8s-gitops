@@ -40,6 +40,8 @@ auth:
 # ── Sentinel ──────────────────────────────────────────────────────────────────
 sentinel:
   enabled: true
+  image:
+    tag: "latest"
 
   # The logical name for this master group.  Clients and Sentinels both use
   # this name to refer to the cluster — it must match redis_master_set in config.py.
@@ -132,10 +134,9 @@ replica:
 
 # ── Metrics / Redis Exporter ───────────────────────────────────────────────────
 metrics:
-  # Deploys redis_exporter as a sidecar on each pod.
-  # Exposes Prometheus-format metrics at :9121/metrics.
-  # The SigNoz OTel Collector scrapes this endpoint (see docs/ARCHITECTURE.md).
   enabled: true
+  image:
+    tag: "latest"
 
   resources:
     requests:
@@ -162,6 +163,4 @@ podAntiAffinityPreset: soft   # "soft" = prefer different nodes, don't enforce
 
 # ── Image ─────────────────────────────────────────────────────────────────────
 image:
-  # Pin to a specific minor version for reproducibility.
-  # Update during maintenance windows after testing.
-  tag: 7.4.1-debian-12-r0
+  tag: "latest"
