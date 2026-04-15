@@ -25,9 +25,33 @@ import logging
 from functools import cached_property
 
 from redis import Redis
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ReadOnlyError, TimeoutError as RedisTimeoutError
+from redis.retry import Retry
 from redis.sentinel import Sentinel
 
 from config import settings
+
+# Retry config shared by both master and replica connections.
+#
+# Why: during a Sentinel failover there is a window (~1-8s) where the old
+# master is unreachable and the new one hasn't been promoted yet.  Without
+# retries every Redis call in that window raises an exception and the HTTP
+# request fails with 500.
+#
+# With retries the call blocks briefly, re-queries Sentinel on each attempt,
+# and succeeds once the new master is elected — the request completes with
+# some extra latency instead of failing.
+#
+# ExponentialBackoff(cap=1, base=0.1): 0.1 → 0.2 → 0.4 → 0.8 → 1s → 1s ...
+# retries=6: up to ~3.5s of total retry time — covers the new 1.5s detection
+# window + ~2s election/promotion time with headroom.
+_RETRY = Retry(
+    backoff=ExponentialBackoff(cap=1, base=0.1),
+    retries=6,
+    supported_errors=(RedisConnectionError, RedisTimeoutError, ReadOnlyError),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +122,8 @@ class RedisManager:
             password=settings.redis_password,
             db=settings.redis_db,
             decode_responses=True,   # Return str, not bytes
+            retry=_RETRY,
+            retry_on_timeout=True,
         )
 
     @property
@@ -115,6 +141,8 @@ class RedisManager:
             password=settings.redis_password,
             db=settings.redis_db,
             decode_responses=True,
+            retry=_RETRY,
+            retry_on_timeout=True,
         )
 
     def health_check(self) -> dict[str, str]:

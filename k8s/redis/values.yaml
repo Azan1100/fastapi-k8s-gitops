@@ -52,8 +52,11 @@ sentinel:
   # a single Sentinel failure does NOT cause erroneous failovers.
   quorum: 2
 
-  # Sentinel waits this long (ms) before declaring a master "objectively down"
-  downAfterMilliseconds: 5000
+  # Sentinel waits this long (ms) before declaring a master "objectively down".
+  # 1500ms is low enough to fail fast while still ignoring transient blips.
+  # The old value (5000ms) was the largest contributor to visible write downtime
+  # during failover — requests would fail for the full 5s before election even started.
+  downAfterMilliseconds: 1500
 
   # After electing a new master, Sentinel waits this long before starting
   # the next possible failover (prevents flapping).
